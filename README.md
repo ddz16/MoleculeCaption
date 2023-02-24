@@ -134,7 +134,7 @@ python text_text2mol_metric.py --input_file out_base.txt
 ```
 
 # Finetune & Generate captions
-We provide finetuned checkpoints of **MoMu-S-enhanced MolT5** with two different sizes (small/base). If you want to generate captions without finetuning, you can download the two checkpoints from , the password is **1234**. Put these three checkpoints in `./saved_models` folder, you can skip the finetuning process and directly run the commands for generating captions.
+We provide finetuned checkpoints of **MoMu-S-enhanced MolT5** with two different sizes (small/base). If you want to generate captions without finetuning, you can download the two checkpoints from https://pan.baidu.com/s/1n6gyUEbkmvIkNO7aNmtEZA, the password is **1234**. Put these three checkpoints in `./saved_models` folder, you can skip the finetuning process and directly run the commands for generating captions.
 
 ## Finetune
 Finetune **MoMu-S**-enhanced MolT5:
