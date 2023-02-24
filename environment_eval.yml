@@ -1,8 +1,12 @@
-name: MolTextTranslationEval
+name: MoleculeCaption
 channels:
   - pytorch
   - conda-forge
-  - defaults
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/r
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/pro
+  - https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/msys2
 dependencies:
   - _libgcc_mutex=0.1=conda_forge
   - _openmp_mutex=4.5=2_gnu
@@ -225,3 +229,4 @@ dependencies:
     - wcwidth==0.2.5
     - werkzeug==2.1.2
     - wrapt==1.14.1
+    - -i https://pypi.tuna.tsinghua.edu.cn/simple
