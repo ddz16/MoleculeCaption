@@ -52,7 +52,6 @@ parser.add_argument('--text_trunc_length', type=str, default=256, help='tokenize
 
 args = parser.parse_args()
 
-
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 with open('cids_to_smiles.pkl', 'rb') as f:

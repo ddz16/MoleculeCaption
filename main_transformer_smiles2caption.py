@@ -17,7 +17,7 @@ from transformers.optimization import get_linear_schedule_with_warmup
 import numpy as np
 
 import pickle
-from model.GinGPT import MappingType
+
 import argparse
 import sys
 
@@ -25,13 +25,14 @@ from model.GinT5 import GinDecoder
 # from model.GinGPT import GinDecoder, ClipCaptionModel, ClipCaptionPrefix
 from model.gin_model import GNN
 from dataloader import TextMoleculeReplaceDataset
-from models_baseline import Seq2SeqTransformer
+from tqdm import tqdm
+
 #import wandb
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--mode', type=str, default='train', help='mode')
-parser.add_argument('--epochs', type=int, default=40, help='number of epochs')
+parser.add_argument('--epochs', type=int, default=10, help='number of epochs')
 parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')
 parser.add_argument('--batch_size', type=int, default=16, help='batch size')
 parser.add_argument('--hidden_size', type=int, default=2048, help='hidden size')
@@ -42,7 +43,7 @@ parser.add_argument('--max_smiles_length', type=int, default=512, help='max smil
 parser.add_argument('--dropout', type=float, default=0.1, help='dropout')
 parser.add_argument('--nhead', type=int, default=8, help='num attention heads')
 
-parser.add_argument('--MoMuK', type=bool, default=False, action='store_true')
+parser.add_argument('--MoMuK', default=False, action='store_true')
 parser.add_argument('--model_size', type=str, default='base')
 parser.add_argument('--data_path', type=str, default='data/', help='path where data is located =')
 parser.add_argument('--saved_path', type=str, default='saved_models/', help='path where weights are saved')
@@ -56,97 +57,44 @@ parser.add_argument('--output_file', type=str, default='out.txt', help='path whe
 
 args = parser.parse_args()
 
+runseed = 100
+torch.manual_seed(runseed)
+np.random.seed(runseed)
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(runseed)
 
-tokenizer = T5Tokenizer.from_pretrained("molt5-"+args.model_size+"/", model_max_length=512)  # BertTokenizer.from_pretrained('scibert/')
+
+tokenizer = T5Tokenizer.from_pretrained("molt5-"+args.model_size+"-smiles2caption/", model_max_length=512)
 
 train_data = TextMoleculeReplaceDataset(args.data_path, 'train', tokenizer)
 val_data = TextMoleculeReplaceDataset(args.data_path, 'validation', tokenizer)
 test_data = TextMoleculeReplaceDataset(args.data_path, 'test', tokenizer)
 
-
-def build_smiles_vocab(dicts):
-    smiles = []
-    for d in dicts:
-        for cid in d:
-            smiles.append(d[cid])
-
-    char_set = set()
-
-    for smi in smiles:
-        for c in smi:
-            char_set.add(c)
-
-    return ''.join(char_set)
-
-class SmilesTokenizer():
-
-    def __init__(self, smiles_vocab, max_len=512):
-        self.smiles_vocab = smiles_vocab
-        self.max_len = max_len
-        self.vocab_size = len(smiles_vocab) + 3 #SOS, EOS, pad
-        
-        self.SOS = self.vocab_size - 2
-        self.EOS = self.vocab_size - 1
-        self.pad = 0
-
-    def letterToIndex(self, letter):
-        return self.smiles_vocab.find(letter) + 1 #skip 0 == [PAD]
-        
-    def ind2Letter(self, ind):
-        if ind == self.SOS: return '[SOS]'
-        if ind == self.EOS: return '[EOS]'
-        if ind == self.pad: return '[PAD]'
-        return self.smiles_vocab[ind-1]
-        
-    def decode(self, iter):
-        return "".join([self.ind2Letter(i) for i in iter]).replace('[SOS]','').replace('[EOS]','').replace('[PAD]','')
-
-    def __len__(self):
-        return self.vocab_size
-
-    def get_tensor(self, smi):
-        tensor = torch.zeros(1, args.max_smiles_length, dtype=torch.int64)
-        tensor[0,0] = smiles_tokenizer.SOS
-        for li, letter in enumerate(smi):
-            tensor[0,li+1] = self.letterToIndex(letter)
-            if li + 3 == args.max_smiles_length: break
-        tensor[0, li+2] = self.EOS
-
-        return tensor
-
-smiles_vocab = build_smiles_vocab((train_data.cids_to_smiles, val_data.cids_to_smiles, test_data.cids_to_smiles))
-smiles_tokenizer = SmilesTokenizer(smiles_vocab)
-
-train_data.smiles_tokenizer = smiles_tokenizer
-val_data.smiles_tokenizer = smiles_tokenizer
-test_data.smiles_tokenizer = smiles_tokenizer
-
-
 train_dataloader = torch_geometric.loader.DataLoader(train_data, batch_size=args.batch_size, shuffle=True, num_workers=4)#, collate_fn=pad_collate)
-val_dataloader = torch_geometric.loader.DataLoader(val_data, batch_size=args.batch_size, shuffle=True)#, collate_fn=pad_collate)
+val_dataloader = torch_geometric.loader.DataLoader(val_data, batch_size=args.batch_size, shuffle=True, num_workers=4)#, collate_fn=pad_collate)
 test_dataloader = torch_geometric.loader.DataLoader(test_data, batch_size=args.batch_size, shuffle=True)#, collate_fn=pad_collate)
 
+if args.MoMuK:
+    print("model init with MoMu-K")
+else:
+    print("model init with MoMu-S")
 
-model = GinDecoder(has_graph=True, MoMuK=args.MoMuK, model_size=args.model_size).to(device)
+my_model = GinDecoder(has_graph=True, MoMuK=args.MoMuK, model_size=args.model_size).to(device)
 
 if args.mode == 'test':
-    state_dict = torch.load('saved_models/gint5_smiles2caption_epoch40.pt')
-    model.load_state_dict(state_dict)
+    state_dict = torch.load('saved_models/gint5_smiles2caption_'+args.model_size+'.pt')
+    my_model.load_state_dict(state_dict)
 
 if args.mode == 'train':
-    for p in model.named_parameters():
+    for p in my_model.named_parameters():
     	if p[1].requires_grad:
             print(p[0])
 
-    pg = [p for p in model.parameters() if p.requires_grad]
+    pg = [p for p in my_model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(pg, lr=args.lr)
     # num_training_steps = args.epochs * len(train_dataloader) - args.num_warmup_steps
     # scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps = args.num_warmup_steps, num_training_steps = num_training_steps) 
-
-PAD_IDX = 0 #note that both vocabularies share the same padding token
-
-criterion = torch.nn.CrossEntropyLoss(ignore_index=PAD_IDX)
 
 MAX_LENGTH = args.max_length
 
@@ -155,32 +103,40 @@ def train_epoch(dataloader, model, optimizer, epoch):
     print(f">>> Training epoch {epoch}")
     sys.stdout.flush()
     
-    model.train()
+    # model.train()
     losses = 0
-    criterion = torch.nn.CrossEntropyLoss(ignore_index=0)
+    # criterion = torch.nn.CrossEntropyLoss(ignore_index=0)
 
-    for j, d in enumerate(dataloader):
-        model.zero_grad()
-        if j % 1000 == 0: print('Step:', j)
-
+    for j, d in tqdm(enumerate(dataloader), total=len(dataloader)):
+        # model.zero_grad()
+    
         graph = d['graph'].to(device)
 
-        smiles_tokens = d['smiles_tokens'].to(device)
+        smiles_tokens_ = tokenizer(d['smiles'], padding=True, truncation=True, return_tensors="pt")
+        smiles_tokens = smiles_tokens_['input_ids'].to(device)
+        src_padding_mask = smiles_tokens_['attention_mask'].to(device)  # encoder input mask
+        
+        text_tokens_ = tokenizer(d['description'], padding=True, truncation=True, return_tensors="pt")
+        text_mask = text_tokens_['attention_mask'].to(device)  # caption mask, decoder input mask
+        label = text_tokens_['input_ids'].to(device)  # caption
 
-        src_padding_mask = d['smiles_mask'].to(device)  # encoder输入的mask
-
-        text_mask = d['text_mask'].to(device)  # caption的mask，即decoder输入的mask
-
-        label = d['text'].to(device)  # caption本身
         label = label.masked_fill(~text_mask.bool(), -100)
 
+        # print(smiles_tokens)
+        # print(src_padding_mask)
+        # print(label)
+        # print(text_mask)
+
         loss = model(graph, smiles_tokens, src_padding_mask, text_mask, label)
+
+        if j % 300 == 0: 
+            print('total steps: {}, step: {}, loss: {}'.format(epoch*len(dataloader) + j, j, loss))
 
         loss.backward()
         optimizer.step()
         # scheduler.step()
         optimizer.zero_grad()
-        print('total steps: {}, step: {}, loss: {}'.format(epoch*len(dataloader) + j, j, loss))
+
         losses += loss.item()
 
     return losses / len(dataloader)
@@ -189,59 +145,63 @@ def train_epoch(dataloader, model, optimizer, epoch):
 def eval(dataloader, model, epoch):
     model.eval()
     losses = 0
-    criterion = torch.nn.CrossEntropyLoss(ignore_index=0)
+    # criterion = torch.nn.CrossEntropyLoss(ignore_index=0)
 
     with torch.no_grad():
-        for j, d in enumerate(dataloader):
-            if j % 100 == 0: print('Val Step:', j)
+        for j, d in tqdm(enumerate(dataloader), total=len(dataloader)):
 
             graph = d['graph'].to(device)
 
-            smiles_tokens = d['smiles_tokens'].to(device)
+            smiles_tokens_ = tokenizer(d['smiles'], padding=True, truncation=True, return_tensors="pt")
+            smiles_tokens = smiles_tokens_['input_ids'].to(device)
+            src_padding_mask = smiles_tokens_['attention_mask'].to(device)  # encoder input mask
+            
+            text_tokens_ = tokenizer(d['description'], padding=True, truncation=True, return_tensors="pt")
+            text_mask = text_tokens_['attention_mask'].to(device)  # caption mask, decoder input mask
+            label = text_tokens_['input_ids'].to(device)  # caption
 
-            src_padding_mask = d['smiles_mask'].to(device)  # encoder输入的mask
-
-            text_mask = d['text_mask'].to(device)  # caption的mask，即decoder输入的mask
-
-            label = d['text'].to(device)  # caption本身
             label = label.masked_fill(~text_mask.bool(), -100)
 
             loss = model(graph, smiles_tokens, src_padding_mask, text_mask, label)
             losses += loss.item()
-            print('val total steps: {}, step: {}, val loss: {}'.format(epoch*len(dataloader) + j, j, loss))
-
+            if j % 100 == 0:
+                print('val total steps: {}, step: {}, val loss: {}'.format(epoch*len(dataloader) + j, j, loss))
+    
     return losses/len(dataloader)
 
 
 if args.mode == 'train':
+    # my_model.train()
     min_val_loss = 10000
     for i in range(args.epochs):
         print('Epoch:', i)
-        train_epoch(train_dataloader, model, optimizer, i)
-        val_loss = eval(val_dataloader, model, i)
+        train_epoch(train_dataloader, model=my_model, optimizer=optimizer, epoch=i)
+        val_loss = eval(val_dataloader, model=my_model, epoch=i)
         if val_loss < min_val_loss:
             min_val_loss = val_loss
-            print("save model")
-            torch.save(model.state_dict(), args.saved_path + 'gint5_smiles2caption_epoch' + str(i) + '.pt')
+            print("--------------------save model--------------------")
+            torch.save(my_model.state_dict(), args.saved_path + 'gint5_smiles2caption_' + args.model_size + '.pt')
 
 
 if args.mode == 'test':
-    model.eval()
+    my_model.eval()
     smiles = []
     test_outputs = []
     test_gt = []
     with torch.no_grad():
-        for j, d in enumerate(test_dataloader):
+        for j, d in tqdm(enumerate(test_dataloader), total=len(test_dataloader)):
             real_text = d['description']
             graph = d['graph'].to(device)
 
-            smiles_tokens = d['smiles_tokens'].to(device)
-
-            src_padding_mask = d['smiles_mask'].to(device)  # encoder输入的mask
-
-            text_mask = d['text_mask'].to(device)  # caption的mask，即decoder输入的mask
+            smiles_tokens_ = tokenizer(d['smiles'], padding=True, truncation=True, return_tensors="pt")
+            smiles_tokens = smiles_tokens_['input_ids'].to(device)
+            src_padding_mask = smiles_tokens_['attention_mask'].to(device)  # encoder input mask
+            
+            # text_tokens_ = tokenizer(d['description'], padding=True, truncation=True, return_tensors="pt")
+            # text_mask = text_tokens_['attention_mask'].to(device)  # caption mask, decoder input mask
+            # label = text_tokens_['input_ids'].to(device)  # caption
           
-            outputs = model.translate(graph, smiles_tokens, src_padding_mask, tokenizer)
+            outputs = my_model.translate(graph, smiles_tokens, src_padding_mask, tokenizer)
 
             # print(outputs)
             # break
